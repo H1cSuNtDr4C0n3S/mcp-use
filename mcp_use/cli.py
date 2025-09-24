@@ -4,12 +4,20 @@ MCP-Use CLI Tool - All-in-one CLI for creating and deploying MCP projects.
 """
 
 import argparse
+import asyncio
 import sys
 import threading
 import time
 from pathlib import Path
 
 from mcp_use import __version__
+from mcp_use.auto_update import (
+    AdapterGenerator,
+    AutoUpdateTestSuite,
+    DocumentationAnalyzer,
+    DocumentationIntelligence,
+    DocumentationScraper,
+)
 
 # ============= SPINNER CLASS =============
 
@@ -464,6 +472,9 @@ Available Commands:
   create     🚀 Create a new MCP project (server, agent, or both)
              Interactive wizard to scaffold your MCP project
 
+  auto-update 🔄  Plan adapter updates for a new model
+             Scrape docs, analyze changes, and generate tasks
+
   deploy     ☁️  Deploy your MCP project to the cloud
              (Coming soon - Cloud deployment from CLI)
 
@@ -477,6 +488,70 @@ For more information, visit: https://mcp-use.com
     """
     print(help_text)
 
+
+def handle_auto_update(argv: list[str]) -> None:
+    """Run the auto-update pipeline for a specific model."""
+
+    command_parser = argparse.ArgumentParser(
+        prog="mcp-use auto-update",
+        description="Scrape, analyze, and plan adapter updates for a model.",
+    )
+    command_parser.add_argument("--model", required=True, help="Model identifier, e.g. gpt-4.1")
+    command_parser.add_argument("--doc-url", required=True, help="URL to the function calling documentation")
+    command_parser.add_argument(
+        "--save-artifacts",
+        action="store_true",
+        help="Persist generated artifacts to disk instead of printing only",
+    )
+    command_parser.add_argument(
+        "--output-dir",
+        default="auto_update_artifacts",
+        help="Directory where artifacts are written when --save-artifacts is used",
+    )
+    options = command_parser.parse_args(argv)
+
+    print(f"\n🔎 Scraping documentation for {options.model}…")
+    scraper = DocumentationScraper()
+    try:
+        snapshot = asyncio.run(scraper.scrape(options.model, options.doc_url))
+    except Exception as exc:  # noqa: BLE001 - CLI surfaces generic failure message
+        print(f"\n❌ Failed to scrape documentation: {exc}")
+        sys.exit(1)
+
+    analyzer = DocumentationAnalyzer(intelligence=DocumentationIntelligence())
+    analysis = analyzer.analyze(snapshot)
+    generator = AdapterGenerator()
+    plan = generator.build_plan(analysis)
+
+    print("\n📌 Suggested tasks:")
+    for task in plan.tasks:
+        print(f"   - {task}")
+
+    if plan.artifacts:
+        print("\n🧪 Generated artifacts:")
+        for artifact in plan.artifacts:
+            print(f"   - {artifact.filename}")
+    else:
+        print("\nℹ️  No artifacts generated for this documentation snapshot.")
+
+    suite = AutoUpdateTestSuite(plan)
+    results = suite.run()
+    print("\n✅ Validation results:")
+    for result in results:
+        status = "PASS" if result.passed else "FAIL"
+        detail = f" ({result.details})" if result.details else ""
+        print(f"   - {result.name}: {status}{detail}")
+
+    if options.save_artifacts and plan.artifacts:
+        output_dir = Path(options.output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        for artifact in plan.artifacts:
+            target = output_dir / artifact.filename
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(artifact.content)
+        print(f"\n💾 Saved artifacts to {output_dir.resolve()}")
+
+    print("\n✨ Auto-update planning complete.")
 
 def handle_create():
     """Handle the create command."""
@@ -556,10 +631,10 @@ def main(args=None):
     parser.add_argument("--help", "-h", action="store_true", help="Show help message")
 
     # Add subcommand as positional argument
-    parser.add_argument("command", nargs="?", choices=["create", "deploy"], help="Command to execute")
+    parser.add_argument("command", nargs="?", choices=["create", "deploy", "auto-update"], help="Command to execute")
 
     # Parse arguments
-    parsed_args = parser.parse_args(args)
+    parsed_args, remaining = parser.parse_known_args(args)
 
     # Handle help flag or no command
     if parsed_args.help or not parsed_args.command:
@@ -571,6 +646,8 @@ def main(args=None):
         handle_create()
     elif parsed_args.command == "deploy":
         handle_deploy()
+    elif parsed_args.command == "auto-update":
+        handle_auto_update(remaining)
     else:
         print(f"Unknown command: {parsed_args.command}")
         show_help()
