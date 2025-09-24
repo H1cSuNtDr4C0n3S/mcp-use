@@ -5,7 +5,7 @@ This library provides a unified interface for connecting different LLMs
 to MCP tools through existing LangChain adapters.
 """
 
-from importlib.metadata import version
+from importlib.metadata import PackageNotFoundError, version
 
 # Import logging FIRST to ensure it's configured before other modules
 # This MUST happen before importing observability to ensure loggers are configured
@@ -19,7 +19,10 @@ from .config import load_config_file
 from .connectors import BaseConnector, HttpConnector, StdioConnector, WebSocketConnector
 from .session import MCPSession
 
-__version__ = version("mcp-use")
+try:
+    __version__ = version("mcp-use")
+except PackageNotFoundError:
+    __version__ = "0.0.0-dev"
 
 __all__ = [
     "MCPAgent",
